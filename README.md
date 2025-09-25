@@ -1,4 +1,4 @@
-# EventBus - 企业级C++事件总线系统
+# EventBus - C++事件总线系统
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B17)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -331,16 +331,6 @@ bool publish_if_min_subscribers(const std::string& eventName,
 
 void setVerboseLogging(bool verbose);
 ```
-
-## 🤝 贡献指南
-
-欢迎贡献代码！请遵循以下步骤：
-
-1. Fork 这个项目
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建Pull Request
 
 ## 📄 许可证
 

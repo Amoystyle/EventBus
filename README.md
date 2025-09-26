@@ -1,7 +1,6 @@
 # EventBus - C++事件总线系统
 
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.wikipedia.org/wiki/C%2B%2B17)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Thread Safe](https://img.shields.io/badge/Thread-Safe-brightgreen.svg)]()
 
 一个高性能、线程安全、类型安全的C++17事件总线系统，支持智能类型转换和任意参数数量。
@@ -331,10 +330,6 @@ bool publish_if_min_subscribers(const std::string& eventName,
 
 void setVerboseLogging(bool verbose);
 ```
-
-## 📄 许可证
-
-本项目采用MIT许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
 ## 🔗 相关链接
 

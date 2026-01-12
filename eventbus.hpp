@@ -98,6 +98,40 @@ struct function_traits<std::_Binder<std::_Unforced, F, BoundArgs...>>
     static constexpr size_t arity = function_traits<F>::arity;
 };
 
+template<typename TargetType>
+struct map_to_source_type
+{
+    using type = std::decay_t<TargetType>;
+};
+
+template<>
+struct map_to_source_type<std::string>
+{
+    using type = const char*;
+};
+
+template<>
+struct map_to_source_type<const std::string&>
+{
+    using type = const char*;
+};
+
+template<typename T>
+struct map_to_source_type<const T&>
+{
+    using type = std::conditional_t<
+        std::is_same_v<T, std::string>,
+        const char*,
+        T
+    >;
+};
+
+template<typename T>
+struct map_to_source_type<T&>
+{
+    using type = T;
+};
+
 } // namespace detail
 
 class ICallbackWrapper
@@ -171,7 +205,7 @@ private:
     template<std::size_t... Is>
     bool try_parameter_conversion(const std::any& args_any, std::index_sequence<Is...>)
     {
-        using SourceTypes = std::tuple<typename map_to_source_type<std::tuple_element_t<Is, std::tuple<Args...>>>::type...>;
+        using SourceTypes = std::tuple<typename detail::map_to_source_type<std::tuple_element_t<Is, std::tuple<Args...>>>::type...>;
 
         if (auto source_tuple = std::any_cast<SourceTypes>(&args_any)) {
             try {
@@ -183,42 +217,6 @@ private:
 
         return false;
     }
-
-    template<typename TargetType>
-    struct map_to_source_type
-    {
-        using type = std::decay_t<TargetType>;
-    };
-
-    // String type specialization
-    template<>
-    struct map_to_source_type<std::string>
-    {
-        using type = const char*;
-    };
-
-    template<>
-    struct map_to_source_type<const std::string&>
-    {
-        using type = const char*;
-    };
-
-    // Reference Type Specialization - Using Value Types
-    template<typename T>
-    struct map_to_source_type<const T&>
-    {
-        using type = std::conditional_t<
-            std::is_same_v<T, std::string>,
-            const char*,
-            T
-        >;
-    };
-
-    template<typename T>
-    struct map_to_source_type<T&>
-    {
-        using type = T;
-    };
 
     template<typename SourceTuple, std::size_t... Is>
     void invoke_with_conversion(const SourceTuple& source_tuple, std::index_sequence<Is...>)
@@ -463,4 +461,4 @@ private:
     }
 };
 
-} // namespace eventbus
+} // namespace AYBase

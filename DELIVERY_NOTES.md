@@ -1,145 +1,98 @@
-# 🎉 EventBus 项目交付说明
+# EventBus Delivery Notes
 
-## 📦 交付内容
+## 交付内容
 
-### 🎯 核心文件
-- **`eventbus.hpp`** - 完整的EventBus头文件实现，单文件即可使用
-- **`simple_test.cpp`** - 基础功能测试程序
-- **`test_full.cpp`** - 完整功能测试（包含性能和线程安全测试）
-- **`example_simple.cpp`** - 实际应用场景示例
+核心文件：
 
-### 🛠️ 构建系统
-- **`build.bat`** - Windows一键构建脚本
-- **`Makefile`** - Unix/Linux构建支持
-- **`CMakeLists.txt`** - 跨平台CMake配置
-- **`demo.bat`** - 完整演示程序
+- `eventbus.hpp`：单头文件 EventBus 实现。
+- `simple_test.cpp`：基础功能和关键语义测试。
+- `test_full.cpp`：完整功能、统计、条件发布、线程安全示例。
+- `test_complex_types.cpp`：复杂类型载荷测试。
+- `example_simple.cpp`：业务风格使用示例。
 
-### 📚 文档
-- **`README.md`** - 完整使用文档和API参考
-- **`QUICK_START.md`** - 5分钟快速上手指南
-- **`PROJECT_SUMMARY.md`** - 项目技术总结和成就展示
-- **`DELIVERY_NOTES.md`** - 本交付说明文件
+构建和运行：
 
-## 🚀 立即开始
+- `CMakeLists.txt`：CMake 目标和 CTest 测试。
+- `build.bat`：Windows 构建脚本。
+- `demo.bat`：演示脚本。
 
-### 1. 快速测试
-```bash
-# 一键构建所有组件
-build.bat
+文档：
 
-# 运行基础测试
-simple_test.exe
+- `README.md`：完整使用和 API 说明。
+- `QUICK_START.md`：快速上手。
+- `PROJECT_SUMMARY.md`：当前技术实现总结。
+- `DELIVERY_NOTES.md`：本交付说明。
 
-# 运行完整演示
-demo.bat
-```
+## 当前 API 重点
 
-### 2. 集成到您的项目
 ```cpp
-// 只需包含一个头文件
-#include "eventbus.hpp"
-using namespace eventbus;
+eventbus::EventBus bus;
 
-// 立即开始使用
-EventBus bus;
-bus.subscribe("event", [](const std::string& msg) {
-    std::cout << "Received: " << msg << std::endl;
+auto id = bus.subscribe("event", [](const std::string& value) {
+    std::cout << value << "\n";
 });
-bus.publish("event", "Hello EventBus!");
+
+auto result = bus.publish("event", "payload");
+
+(void)bus.unsubscribe("event", id);
 ```
 
-## ✨ 核心特性验证
+默认执行策略是 `eventbus::ExecutionPolicy::Sequential`。同一个订阅回调不会被多个发布线程同时执行。
 
-### ✅ 线程安全
-- 使用`std::shared_mutex`实现读写分离
-- 支持多线程并发订阅、发布、取消订阅
-- 原子操作保证ID生成安全
+需要极限吞吐时，可以显式使用：
 
-### ✅ 智能类型转换
-- 自动`const char*` → `std::string`转换
-- 值类型到引用类型的智能传递
-- 支持任意数量参数的动态转换
+```cpp
+bus.subscribe("fast", [](int value) {
+    (void)value;
+}, eventbus::ExecutionPolicy::Concurrent);
+```
 
-### ✅ 高性能
-- 零运行时开销的模板元编程
-- 编译时类型检查和优化
-- 性能基准：~500ns/事件（1000个回调）
+使用 `Concurrent` 表示回调内部的共享状态同步责任由调用方承担。
 
-### ✅ 企业级功能
-- 完整的统计监控系统
-- 批量操作支持
-- 条件发布功能
-- 异常安全保障
+## 已验证能力
 
-## 🎯 验证清单
+- 多线程安全订阅、发布、取消订阅。
+- 默认串行回调执行。
+- 显式并发回调执行。
+- `publish()` 返回 `PublishResult`。
+- 回调异常计入失败结果。
+- 类型不匹配计数。
+- `const char*` 到 `std::string` / `std::string_view`。
+- `std::string` 到 `std::string_view`。
+- 复杂 STL 类型和自定义类型载荷。
+- 取消订阅等待已进入执行的回调完成。
 
-请运行以下命令验证所有功能：
+## 构建验证
+
+推荐验证命令：
 
 ```bash
-# 1. 构建验证
-build.bat
-
-# 2. 基础功能验证
-simple_test.exe
-
-# 3. 完整功能验证（包含性能测试）
-complete_test.exe
-
-# 4. 实际应用验证
-usage_example.exe
-
-# 5. 完整演示
-demo.bat
+cmake -S . -B build
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure --timeout 30
 ```
 
-## 📊 性能指标
+已使用的额外编译验证：
 
-在测试环境中验证的性能：
-- **单线程发布**: ~500ns/事件 (1000个回调)
-- **多线程发布**: ~800ns/事件 (4线程并发)
-- **订阅操作**: ~50ns/订阅
-- **内存开销**: 每个回调约40字节
+```bash
+g++ -std=c++17 -Wall -Wextra -Wpedantic -I. -c simple_test.cpp -o build/simple_test_gcc.o
+g++ -std=c++17 -Wall -Wextra -Wpedantic -I. -c test_full.cpp -o build/test_full_gcc.o
+g++ -std=c++17 -Wall -Wextra -Wpedantic -I. -c test_complex_types.cpp -o build/test_complex_types_gcc.o
+```
 
-## 🔧 技术规格
+## 集成注意事项
 
-- **C++标准**: C++17或更高
-- **编译器支持**: MSVC 2017+, GCC 7+, Clang 5+
-- **平台支持**: Windows, Linux, macOS
-- **依赖**: 仅标准库，无第三方依赖
-- **线程安全**: 完全线程安全
-- **头文件**: 单文件，即包含即用
+- 只需要包含 `eventbus.hpp`。
+- 回调必须返回 `void`。
+- 回调不能使用非 `const` 左值引用参数。
+- `publish()` 是同步调用，不是异步投递。
+- 大对象载荷会被复制或移动进分发 tuple；建议用 `std::shared_ptr<const T>` 或生命周期明确的 `const T*`。
+- 成员函数回调建议使用 lambda 显式绑定对象，并保证对象生命周期覆盖订阅期。
+- `unsubscribe()`、`unsubscribe_all()`、`clear()` 可能等待正在执行的回调完成，不应在对延迟极敏感的线程中无评估调用。
 
-## 🎊 项目成就
+## 当前限制
 
-从基础EventBus到企业级实现的完整升级：
-
-1. **🛡️ 线程安全升级** - 从单线程到多线程安全
-2. **🔄 智能转换系统** - 自动类型转换，提升开发体验
-3. **⚡ 性能优化** - 零开销抽象，高性能事件分发
-4. **📊 监控系统** - 完整的统计和监控功能
-5. **🔧 工程化** - 完整的构建系统和文档
-6. **🌍 跨平台** - 支持主流操作系统和编译器
-
-## 📞 使用支持
-
-- **快速上手**: 查看`QUICK_START.md`
-- **完整文档**: 查看`README.md`
-- **技术细节**: 查看`PROJECT_SUMMARY.md`
-- **示例代码**: 运行`demo.bat`查看完整演示
-
-## 🏆 交付确认
-
-✅ **功能完整性** - 所有需求功能已实现并测试  
-✅ **代码质量** - 企业级代码标准，无编译警告  
-✅ **文档完整** - 完整的使用文档和API参考  
-✅ **测试覆盖** - 基础、完整、实际应用三层测试  
-✅ **跨平台** - Windows/Linux/macOS构建验证  
-✅ **性能验证** - 性能基准测试通过  
-
----
-
-**🎉 EventBus企业级项目交付完成！**
-
-*交付时间: 2025年9月25日*  
-*项目状态: ✅ 完成并可用于生产环境*  
-*技术栈: C++17, 模板元编程, 线程安全, 跨平台*
+- 事件名接口仍是 `const std::string&`。
+- 热路径仍有 `std::any` 类型擦除和参数打包成本。
+- 当前版本不提供异步 executor、任务队列或背压。
+- 未提供真实基准测试报告；性能应以目标平台上的专门 benchmark 为准。

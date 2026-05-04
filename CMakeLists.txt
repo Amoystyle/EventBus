@@ -28,6 +28,10 @@ target_link_libraries(simple_test EventBus)
 add_executable(complete_test test_full.cpp)
 target_link_libraries(complete_test EventBus)
 
+# Complex payload test executable
+add_executable(complex_type_test test_complex_types.cpp)
+target_link_libraries(complex_type_test EventBus)
+
 # Usage example executable
 add_executable(usage_example example_simple.cpp)
 target_link_libraries(usage_example EventBus)
@@ -43,7 +47,7 @@ install(FILES eventbus.hpp
         DESTINATION include
         COMPONENT headers)
 
-install(TARGETS simple_test complete_test usage_example
+install(TARGETS simple_test complete_test complex_type_test usage_example
         RUNTIME DESTINATION bin
         COMPONENT executables)
 
@@ -55,6 +59,9 @@ add_test(NAME SimpleTest
 
 add_test(NAME CompleteTest 
          COMMAND complete_test)
+
+add_test(NAME ComplexTypeTest
+         COMMAND complex_type_test)
 
 add_test(NAME UsageExample 
          COMMAND usage_example)

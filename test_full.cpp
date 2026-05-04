@@ -71,8 +71,6 @@ public:
     
     void log_with_timestamp(const std::string &msg) const
     {
-        auto now = std::chrono::system_clock::now();
-        auto time_t = std::chrono::system_clock::to_time_t(now);
         std::cout << "[TIMESTAMP] " << msg << std::endl;
     }
 };
@@ -104,7 +102,7 @@ void performance_test(EventBus& bus)
     std::cout << "Average per publish: " << duration.count() / 1000.0 << " microseconds" << std::endl;
     
     // Cleanup
-    bus.unsubscribe_all("perf_test");
+    (void)bus.unsubscribe_all("perf_test");
 }
 
 // Thread safety test
@@ -133,8 +131,8 @@ void thread_safety_test(EventBus& bus)
                 
                 // Occasionally subscribe and unsubscribe
                 if (i % 50 == 0) {
-                    auto id = bus.subscribe("temp_event", [](int x) {});
-                    bus.unsubscribe("temp_event", id);
+                    auto id = bus.subscribe("temp_event", [](int) {});
+                    (void)bus.unsubscribe("temp_event", id);
                 }
             }
         });
@@ -169,9 +167,19 @@ int main()
     auto id3 = bus.subscribe("greet", GreetHandler{});
     auto id4 = bus.subscribe("save", create_save_handler());
     auto id5 = bus.subscribe("task", handle_task);
-    auto id6 = bus.subscribe("log", std::bind(&Logger::log_message, &logger, std::placeholders::_1, std::placeholders::_2));
+    auto id6 = bus.subscribe("log", [&logger](const std::string& level, const std::string& msg) {
+        logger.log_message(level, msg);
+    });
     auto id7 = bus.subscribe("simple", handle_simple);
     auto id8 = bus.subscribe("complex", handle_complex);
+    (void)id1;
+    (void)id2;
+    (void)id3;
+    (void)id4;
+    (void)id5;
+    (void)id6;
+    (void)id7;
+    (void)id8;
     
     // Add multiple callbacks for same event
     auto id9 = bus.subscribe("add", [](int a, int b) {

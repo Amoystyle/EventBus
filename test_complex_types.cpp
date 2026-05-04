@@ -24,20 +24,20 @@ int main()
     bool custom_verified = false;
 
     auto map_id = bus.subscribe("inventory.update",
-        [&](const std::map<std::string, std::vector<int>>& inventory) {
+        [&map_verified](const std::map<std::string, std::vector<int>>& inventory) {
             map_verified = inventory.size() == 2 &&
                 inventory.at("warehouseA").size() == 3 &&
                 inventory.at("warehouseB").front() == 4;
         });
 
     auto tuple_id = bus.subscribe("telemetry.packet",
-        [&](const std::tuple<int, double, std::string>& packet) {
+        [&tuple_verified](const std::tuple<int, double, std::string>& packet) {
             auto [sequence, latency_ms, region] = packet;
             tuple_verified = sequence == 42 && latency_ms < 2.5 && region == "us-east";
         });
 
     auto custom_id = bus.subscribe("trade.executed",
-        [&](const TradeTicket& ticket) {
+        [&custom_verified](const TradeTicket& ticket) {
             auto it = ticket.metrics.find("fee");
             custom_verified = ticket.id == 9001 &&
                 ticket.symbol == "EVT" &&
@@ -67,9 +67,9 @@ int main()
 
     std::cout << "Complex type tests passed (map, tuple, custom)\n" << std::endl;
 
-    bus.unsubscribe("inventory.update", map_id);
-    bus.unsubscribe("telemetry.packet", tuple_id);
-    bus.unsubscribe("trade.executed", custom_id);
+    (void)bus.unsubscribe("inventory.update", map_id);
+    (void)bus.unsubscribe("telemetry.packet", tuple_id);
+    (void)bus.unsubscribe("trade.executed", custom_id);
 
     return 0;
 }

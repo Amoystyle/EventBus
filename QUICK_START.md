@@ -1,88 +1,111 @@
-# EventBus 快速开始指南
+# EventBus Quick Start
 
-## 🚀 立即体验
+## 1. 构建和测试
 
-### 1. 一键构建和测试
 ```bash
-# Windows
+cmake -S . -B build
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+Windows 脚本：
+
+```bat
 build.bat
-
-# Linux/macOS  
-make test
-
-# 跨平台 CMake
-mkdir build && cd build && cmake .. && make
+demo.bat
 ```
 
-### 2. 运行演示
-```bash
-demo.bat          # 完整演示程序
-simple_test.exe   # 基础功能测试
-usage_example.exe # 实际使用示例
-```
+## 2. 最小示例
 
-## 💡 5分钟上手
-
-### 基本使用
 ```cpp
 #include "eventbus.hpp"
-using namespace eventbus;
 
-int main() {
-    EventBus bus;
-    
-    // 订阅事件
-    bus.subscribe("hello", [](const std::string& name) {
-        std::cout << "Hello, " << name << "!" << std::endl;
+#include <iostream>
+#include <string>
+
+int main()
+{
+    eventbus::EventBus bus;
+
+    auto id = bus.subscribe("hello", [](const std::string& name) {
+        std::cout << "Hello, " << name << "\n";
     });
-    
-    // 发布事件 - 自动类型转换！
-    bus.publish("hello", "World");
-    
-    return 0;
+
+    auto result = bus.publish("hello", "World");
+    std::cout << "called: " << result.invoked << "\n";
+
+    (void)bus.unsubscribe("hello", id);
 }
 ```
 
-### 智能类型转换
-```cpp
-// 订阅需要 std::string 的事件
-bus.subscribe("message", [](const std::string& msg) {
-    std::cout << "Message: " << msg << std::endl;
-});
+## 3. 默认安全执行
 
-// 发布时使用 const char* - 自动转换！
-bus.publish("message", "This is a C string");
+默认订阅策略是 `ExecutionPolicy::Sequential`。同一个回调不会被多个发布线程同时执行。
+
+```cpp
+bus.subscribe("counter", [](int value) {
+    static int total = 0;
+    total += value;
+});
 ```
 
-### 多参数支持
+这适合有内部状态、会访问成员变量或全局变量的回调。
+
+## 4. 显式并发执行
+
+当回调无状态，或回调内部已经自己同步共享状态时，可以使用 `ExecutionPolicy::Concurrent`。
+
 ```cpp
-// 复杂事件处理
-bus.subscribe("user_action", [](const std::string& user, const std::string& action, int priority) {
-    std::cout << "User " << user << " performed " << action 
-              << " with priority " << priority << std::endl;
+bus.subscribe("metrics", [](int value) {
+    (void)value;
+}, eventbus::ExecutionPolicy::Concurrent);
+```
+
+使用 `Concurrent` 后，EventBus 不会为同一个回调加执行锁。调用方必须保证没有 data race。
+
+## 5. 字符串转换
+
+```cpp
+bus.subscribe("message", [](const std::string& msg) {
+    std::cout << msg << "\n";
 });
+bus.publish("message", "const char payload");
+
+bus.subscribe("view", [](std::string_view msg) {
+    std::cout << msg << "\n";
+});
+std::string text = "owned payload";
+bus.publish("view", text);
+bus.publish("view", "literal payload");
+```
+
+## 6. 多参数事件
+
+```cpp
+bus.subscribe("user_action",
+    [](const std::string& user, const std::string& action, int priority) {
+        std::cout << user << " " << action << " " << priority << "\n";
+    });
 
 bus.publish("user_action", "Alice", "login", 5);
 ```
 
-## 📁 文件说明
+## 7. 查看发布结果
 
-- **`eventbus.hpp`** - 核心头文件，包含即用
-- **`simple_test.cpp`** - 基础功能演示
-- **`example_simple.cpp`** - 实际应用示例
-- **`test_full.cpp`** - 完整功能测试（性能+线程安全）
+```cpp
+auto result = bus.publish("user_action", "Alice", "login", 5);
 
-## 🎯 核心特性
+if (result.invoked == 0 || result.failed != 0 || result.type_mismatches != 0) {
+    std::cerr << "dispatch failed or mismatched\n";
+}
+```
 
-✅ **线程安全** - 支持多线程并发访问  
-✅ **智能转换** - 自动 `const char*` → `std::string`  
-✅ **零开销** - 编译时优化，运行时高性能  
-✅ **类型安全** - 编译时和运行时双重保障  
-✅ **易集成** - 单头文件，直接包含使用  
+## 8. 文件说明
 
-## 📖 更多信息
-
-- **README.md** - 完整文档和API参考
-- **PROJECT_SUMMARY.md** - 技术实现详解
-
-**开始您的EventBus之旅吧！** 🎊
+- `eventbus.hpp`：核心单头文件。
+- `simple_test.cpp`：基础功能、执行策略和异常结果测试。
+- `test_full.cpp`：完整功能、统计、条件发布和线程安全示例。
+- `test_complex_types.cpp`：复杂 STL 类型和自定义类型载荷测试。
+- `example_simple.cpp`：实际使用示例。
+- `README.md`：完整 API 和语义说明。
+- `PROJECT_SUMMARY.md`：当前实现总结。

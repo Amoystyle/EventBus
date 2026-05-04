@@ -46,14 +46,13 @@ int main()
 ```cpp
 eventbus::EventBus bus;
 
-// 默认策略：同一个回调不会被多个发布线程同时执行。
+// 默认策略：自动加锁，保证同一个回调同一时刻只有一个线程在执行（绝对安全）
 bus.subscribe("stateful", [](int value) {
     static int total = 0;
     total += value;
 });
 
-// 高吞吐策略：EventBus 不为该回调加执行锁。
-// 使用者必须保证回调内部没有 data race。
+// 高吞吐策略：EventBus 不为该回调加执行锁,回调可能同时被多个线程执行（需要用户自己保证线程安全）
 bus.subscribe("fast", [](int value) {
     (void)value;
 }, eventbus::ExecutionPolicy::Concurrent);

@@ -47,7 +47,7 @@ namespace eventbus {
 enum class ExecutionPolicy
 {
     Sequential, // 默认：自动加锁，保证同一个回调同一时刻只有一个线程在执行（绝对安全）
-    Concurrent   // 并发：不加锁，回调可能同时被多个线程执行（需要用户自己保证线程安全）
+    Concurrent  // 并发：不加锁，回调可能同时被多个线程执行（需要用户自己保证线程安全）
 };
 
 using callback_id = std::size_t;

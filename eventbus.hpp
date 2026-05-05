@@ -14,9 +14,8 @@
  * - Statistics monitoring: Complete event bus status monitoring
  *
  * Performance note:
- * - Callback execution defaults to ExecutionPolicy::Sequential, which serializes
- *   the same callback across publishing threads. Use ExecutionPolicy::Concurrent
- *   only when the callback state is internally synchronized or stateless.
+ * - Callback execution is synchronous and does not take callback-level locks.
+ *   Callback state synchronization is the subscriber's responsibility.
  * - Event parameters are copied into the synchronous dispatch payload. For large
  *   payloads, prefer std::shared_ptr<T>, std::shared_ptr<const T>, or const T*
  *   when the pointee lifetime is guaranteed by the caller.
@@ -27,7 +26,6 @@
 #include <functional>
 #include <unordered_map>
 #include <vector>
-#include <iostream>
 #include <any>
 #include <atomic>
 #include <condition_variable>
@@ -40,17 +38,22 @@
 #include <memory>
 #include <algorithm>
 #include <cstddef>
+#include <sstream>
+#include <thread>
 #include <tuple>
 
 namespace eventbus {
 
-enum class ExecutionPolicy
+using callback_id = std::size_t;
+
+enum class LogLevel
 {
-    Sequential, // 默认：自动加锁，保证同一个回调同一时刻只有一个线程在执行（绝对安全）
-    Concurrent  // 并发：不加锁，回调可能同时被多个线程执行（需要用户自己保证线程安全）
+    Debug,
+    Warning,
+    Error
 };
 
-using callback_id = std::size_t;
+using LogHandler = std::function<void(LogLevel, const std::string&)>;
 
 namespace detail {
 
@@ -186,22 +189,15 @@ class CallbackWrapper : public ICallbackWrapper
 private:
     callback_id id_;
     std::function<void(Args...)> callback_;
-    ExecutionPolicy policy_;
-    std::recursive_mutex invoke_mutex_;
 
 public:
-    CallbackWrapper(callback_id id, std::function<void(Args...)> callback, ExecutionPolicy policy)
-        : id_(id), callback_(std::move(callback)), policy_(policy)
+    CallbackWrapper(callback_id id, std::function<void(Args...)> callback)
+        : id_(id), callback_(std::move(callback))
     {
     }
 
     bool try_invoke(const std::any& args_any) override
     {
-        std::unique_lock<std::recursive_mutex> invoke_lock(invoke_mutex_, std::defer_lock);
-        if (policy_ == ExecutionPolicy::Sequential) {
-            invoke_lock.lock();
-        }
-
         if constexpr (sizeof...(Args) == 0) {
             if (args_any.has_value()) {
                 return false;
@@ -364,6 +360,7 @@ private:
         CallbackPtr callback;
         bool active{true};
         std::size_t in_flight{0};
+        std::unordered_map<std::thread::id, std::size_t> invoking_threads;
         mutable std::mutex state_mutex;
         std::condition_variable idle_cv;
     };
@@ -381,17 +378,44 @@ private:
     std::atomic<callback_id> next_id_{0};
     mutable std::shared_mutex mutex_;
     std::unordered_map<std::string, CallbackList> callbacks_map_;
+    bool closing_{false};
     std::atomic<bool> verbose_logging_{false};
+    mutable std::mutex log_mutex_;
+    LogHandler log_handler_;
 
 public:
     explicit EventBus(bool verbose_logging = false) : verbose_logging_(verbose_logging) {}
 
+    EventBus(bool verbose_logging, LogHandler log_handler)
+        : verbose_logging_(verbose_logging), log_handler_(std::move(log_handler))
+    {
+    }
+
+    ~EventBus() noexcept
+    {
+        try {
+            close();
+        }
+        catch (...) {
+        }
+    }
+
+    EventBus(const EventBus&) = delete;
+    EventBus& operator=(const EventBus&) = delete;
+    EventBus(EventBus&&) = delete;
+    EventBus& operator=(EventBus&&) = delete;
+
     void setVerboseLogging(bool verbose) { verbose_logging_.store(verbose, std::memory_order_relaxed); }
+
+    void setLogHandler(LogHandler handler)
+    {
+        std::lock_guard<std::mutex> lock(log_mutex_);
+        log_handler_ = std::move(handler);
+    }
 
     template <typename Callback>
     callback_id subscribe(const std::string& eventName,
-                          Callback&& callback,
-                          ExecutionPolicy policy = ExecutionPolicy::Sequential)
+                          Callback&& callback)
     {
         using CallbackType = std::decay_t<Callback>;
         using Traits = detail::function_traits<CallbackType>;
@@ -399,24 +423,32 @@ public:
         static_assert(std::is_void_v<typename Traits::return_type>,
                       "EventBus callbacks must return void");
 
-        callback_id id = next_id_.fetch_add(1, std::memory_order_relaxed) + 1;
+        callback_id id = 0;
         const bool verbose = verbose_logging_.load(std::memory_order_relaxed);
 
-        if (verbose) {
-            std::cout
-                << "Subscribe event: " << eventName
-                << "\r\n             ID: " << id
-                << "\r\n          Types: " << typeid(CallbackType).name()
-                << "\r\n      Signature: " << typeid(Signature).name()
-                << "\r\n         Policy: " << (policy == ExecutionPolicy::Sequential ? "Sequential" : "Concurrent")
-                << "\r\n\r\n";
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (closing_) {
+                return 0;
+            }
+
+            id = next_id_.fetch_add(1, std::memory_order_relaxed) + 1;
+            std::function<Signature> func(std::forward<Callback>(callback));
+            auto entry = std::make_shared<CallbackEntry>(create_wrapper_from_function(id, std::move(func)));
+
+            callbacks_map_[eventName].push_back(std::move(entry));
         }
 
-        std::function<Signature> func(std::forward<Callback>(callback));
-        auto entry = std::make_shared<CallbackEntry>(create_wrapper_from_function(id, std::move(func), policy));
-
-        std::unique_lock<std::shared_mutex> lock(mutex_);
-        callbacks_map_[eventName].push_back(std::move(entry));
+        if (verbose) {
+            std::ostringstream message;
+            message
+                << "Subscribe event: " << eventName
+                << "\n             ID: " << id
+                << "\n          Types: " << typeid(CallbackType).name()
+                << "\n      Signature: " << typeid(Signature).name()
+                << "\n";
+            log(LogLevel::Debug, message.str());
+        }
 
         return id;
     }
@@ -470,7 +502,9 @@ public:
 
         if (callbacks.empty()) {
             if (verbose) {
-                std::cout << "Warning: Event '" << eventName << "' has no callbacks\n";
+                std::ostringstream message;
+                message << "Event '" << eventName << "' has no callbacks";
+                log(LogLevel::Warning, message.str());
             }
             return {};
         }
@@ -559,6 +593,9 @@ public:
 
         {
             std::shared_lock<std::shared_mutex> lock(mutex_);
+            if (closing_) {
+                return false;
+            }
             auto it = callbacks_map_.find(eventName);
             if (it == callbacks_map_.end() || it->second.size() < min_subscribers) {
                 return false;
@@ -588,20 +625,38 @@ public:
         wait_for_idle(removed_entries);
     }
 
-private:
-    static std::vector<const CallbackEntry*>& current_invocations()
+    void close()
     {
-        thread_local std::vector<const CallbackEntry*> invocations;
-        return invocations;
+        std::unordered_map<std::string, CallbackList> removed_callbacks;
+
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            if (closing_ && callbacks_map_.empty()) {
+                return;
+            }
+
+            closing_ = true;
+            removed_callbacks.swap(callbacks_map_);
+        }
+
+        for (const auto& pair : removed_callbacks) {
+            for (const auto& entry : pair.second) {
+                deactivate_entry(*entry);
+            }
+        }
+
+        for (const auto& pair : removed_callbacks) {
+            wait_for_idle(pair.second);
+        }
     }
 
+private:
     class InvocationGuard
     {
     public:
         explicit InvocationGuard(CallbackEntry& entry)
             : entry_(entry)
         {
-            current_invocations().push_back(&entry_);
         }
 
         InvocationGuard(const InvocationGuard&) = delete;
@@ -609,12 +664,7 @@ private:
 
         ~InvocationGuard()
         {
-            current_invocations().pop_back();
-            {
-                std::lock_guard<std::mutex> lock(entry_.state_mutex);
-                --entry_.in_flight;
-            }
-            entry_.idle_cv.notify_all();
+            end_invocation(entry_);
         }
 
     private:
@@ -624,6 +674,9 @@ private:
     CallbackList snapshot_callbacks(const std::string& eventName) const
     {
         std::shared_lock<std::shared_mutex> lock(mutex_);
+        if (closing_) {
+            return {};
+        }
 
         auto it = callbacks_map_.find(eventName);
         if (it == callbacks_map_.end()) {
@@ -637,11 +690,13 @@ private:
     PublishResult publish_to_callbacks(const std::string& eventName, const CallbackList& callbacks, bool verbose, Args&&... args)
     {
         if (verbose) {
-            std::cout
+            std::ostringstream message;
+            message
                 << "Publish event: " << eventName
-                << "\r\n         args: " << sizeof...(Args)
-                << "\r\n        types: " << typeid(std::tuple<std::decay_t<Args>...>).name()
-                << "\r\n\r\n";
+                << "\n         args: " << sizeof...(Args)
+                << "\n        types: " << typeid(std::tuple<std::decay_t<Args>...>).name()
+                << "\n";
+            log(LogLevel::Debug, message.str());
         }
 
         std::any args_any;
@@ -663,32 +718,40 @@ private:
                     ++result.type_mismatches;
                     if (verbose) {
                         auto& wrapper = entry->callback;
-                        std::cout
+                        std::ostringstream message;
+                        message
                             << "Type mismatch, skipping callback"
-                            << "\r\n             ID: " << wrapper->get_id()
-                            << "\r\n  expected type: " << wrapper->get_args_type().name()
-                            << "\r\n    actual type: " << typeid(std::tuple<std::decay_t<Args>...>).name()
-                            << "\r\n\r\n";
+                            << "\n             ID: " << wrapper->get_id()
+                            << "\n  expected type: " << wrapper->get_args_type().name()
+                            << "\n    actual type: " << typeid(std::tuple<std::decay_t<Args>...>).name()
+                            << "\n";
+                        log(LogLevel::Debug, message.str());
                     }
                 }
             }
             catch (const std::exception& e) {
                 ++result.failed;
-                std::cerr << "Callback exception (ID: " << entry->callback->get_id() << "): " << e.what() << std::endl;
+                std::ostringstream message;
+                message << "Callback exception (ID: " << entry->callback->get_id() << "): " << e.what();
+                log(LogLevel::Error, message.str());
             }
             catch (...) {
                 ++result.failed;
-                std::cerr << "Callback exception (ID: " << entry->callback->get_id() << "): unknown exception" << std::endl;
+                std::ostringstream message;
+                message << "Callback exception (ID: " << entry->callback->get_id() << "): unknown exception";
+                log(LogLevel::Error, message.str());
             }
         }
 
         if (verbose) {
-            std::cout
+            std::ostringstream message;
+            message
                 << "Successfully called " << result.invoked << " callbacks"
                 << ", failed " << result.failed
                 << ", mismatched " << result.type_mismatches
                 << ", skipped " << result.skipped
-                << "\r\n" << std::endl;
+                << "\n";
+            log(LogLevel::Debug, message.str());
         }
 
         return result;
@@ -696,18 +759,54 @@ private:
 
     InvokeStatus invoke_entry(const CallbackEntryPtr& entry, const std::any& args_any)
     {
-        {
-            std::lock_guard<std::mutex> lock(entry->state_mutex);
-            if (!entry->active) {
-                return InvokeStatus::skipped;
-            }
-            ++entry->in_flight;
+        if (!try_begin_invocation(*entry)) {
+            return InvokeStatus::skipped;
         }
 
         InvocationGuard invocation_guard(*entry);
         return entry->callback->try_invoke(args_any)
             ? InvokeStatus::invoked
             : InvokeStatus::type_mismatch;
+    }
+
+    static bool try_begin_invocation(CallbackEntry& entry)
+    {
+        std::lock_guard<std::mutex> lock(entry.state_mutex);
+        if (!entry.active) {
+            return false;
+        }
+
+        const auto thread_id = std::this_thread::get_id();
+        auto thread_it = entry.invoking_threads.find(thread_id);
+        if (thread_it == entry.invoking_threads.end()) {
+            entry.invoking_threads.emplace(thread_id, 1);
+        } else {
+            ++thread_it->second;
+        }
+
+        ++entry.in_flight;
+        return true;
+    }
+
+    static void end_invocation(CallbackEntry& entry) noexcept
+    {
+        {
+            std::lock_guard<std::mutex> lock(entry.state_mutex);
+            const auto thread_id = std::this_thread::get_id();
+            auto thread_it = entry.invoking_threads.find(thread_id);
+            if (thread_it != entry.invoking_threads.end()) {
+                if (thread_it->second <= 1) {
+                    entry.invoking_threads.erase(thread_it);
+                } else {
+                    --thread_it->second;
+                }
+            }
+
+            if (entry.in_flight > 0) {
+                --entry.in_flight;
+            }
+        }
+        entry.idle_cv.notify_all();
     }
 
     void deactivate_entry(CallbackEntry& entry)
@@ -718,8 +817,9 @@ private:
 
     static bool is_currently_invoking(const CallbackEntry& entry)
     {
-        const auto& invocations = current_invocations();
-        return std::find(invocations.begin(), invocations.end(), &entry) != invocations.end();
+        std::lock_guard<std::mutex> lock(entry.state_mutex);
+        auto thread_it = entry.invoking_threads.find(std::this_thread::get_id());
+        return thread_it != entry.invoking_threads.end() && thread_it->second > 0;
     }
 
     void wait_for_idle(const CallbackList& entries)
@@ -741,12 +841,28 @@ private:
         });
     }
 
+    void log(LogLevel level, const std::string& message) const noexcept
+    {
+        try {
+            LogHandler handler;
+            {
+                std::lock_guard<std::mutex> lock(log_mutex_);
+                handler = log_handler_;
+            }
+
+            if (handler) {
+                handler(level, message);
+            }
+        }
+        catch (...) {
+        }
+    }
+
     template<typename... Args>
     std::shared_ptr<ICallbackWrapper> create_wrapper_from_function(callback_id id,
-                                                                   std::function<void(Args...)> func,
-                                                                   ExecutionPolicy policy)
+                                                                   std::function<void(Args...)> func)
     {
-        return std::make_shared<CallbackWrapper<Args...>>(id, std::move(func), policy);
+        return std::make_shared<CallbackWrapper<Args...>>(id, std::move(func));
     }
 };
 

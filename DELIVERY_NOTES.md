@@ -37,23 +37,22 @@ auto result = bus.publish("event", "payload");
 (void)bus.unsubscribe("event", id);
 ```
 
-默认执行策略是 `eventbus::ExecutionPolicy::Sequential`。同一个订阅回调不会被多个发布线程同时执行。
+EventBus 不为订阅回调加执行锁，回调内部共享状态同步责任由业务方承担。
 
-需要极限吞吐时，可以显式使用：
+无状态或内部已同步的回调可以直接订阅：
 
 ```cpp
 bus.subscribe("fast", [](int value) {
     (void)value;
-}, eventbus::ExecutionPolicy::Concurrent);
+});
 ```
 
-使用 `Concurrent` 表示回调内部的共享状态同步责任由调用方承担。
+同一个回调可能被多个发布线程并发调用。
 
 ## 已验证能力
 
 - 多线程安全订阅、发布、取消订阅。
-- 默认串行回调执行。
-- 显式并发回调执行。
+- 默认并发回调执行，不持有回调级执行锁。
 - `publish()` 返回 `PublishResult`。
 - 回调异常计入失败结果。
 - 类型不匹配计数。

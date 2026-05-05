@@ -38,30 +38,33 @@ int main()
 }
 ```
 
-## 3. 默认安全执行
+## 3. 回调状态同步
 
-默认订阅策略是 `ExecutionPolicy::Sequential`。同一个回调不会被多个发布线程同时执行。
+EventBus 不为同一个回调加执行锁，回调内部共享状态由业务方自行同步。
 
 ```cpp
-bus.subscribe("counter", [](int value) {
-    static int total = 0;
+std::mutex total_mutex;
+int total = 0;
+
+bus.subscribe("counter", [&total_mutex, &total](int value) {
+    std::lock_guard<std::mutex> lock(total_mutex);
     total += value;
 });
 ```
 
-这适合有内部状态、会访问成员变量或全局变量的回调。
+回调里如果需要再次 `publish()`，先释放自己的状态锁，再调用 EventBus。
 
-## 4. 显式并发执行
+## 4. 无状态回调
 
-当回调无状态，或回调内部已经自己同步共享状态时，可以使用 `ExecutionPolicy::Concurrent`。
+无状态回调可以直接订阅。
 
 ```cpp
 bus.subscribe("metrics", [](int value) {
     (void)value;
-}, eventbus::ExecutionPolicy::Concurrent);
+});
 ```
 
-使用 `Concurrent` 后，EventBus 不会为同一个回调加执行锁。调用方必须保证没有 data race。
+同一个回调可能被多个发布线程并发调用。
 
 ## 5. 字符串转换
 
@@ -103,7 +106,7 @@ if (result.invoked == 0 || result.failed != 0 || result.type_mismatches != 0) {
 ## 8. 文件说明
 
 - `eventbus.hpp`：核心单头文件。
-- `simple_test.cpp`：基础功能、执行策略和异常结果测试。
+- `simple_test.cpp`：基础功能、并发回调和异常结果测试。
 - `test_full.cpp`：完整功能、统计、条件发布和线程安全示例。
 - `test_complex_types.cpp`：复杂 STL 类型和自定义类型载荷测试。
 - `example_simple.cpp`：实际使用示例。

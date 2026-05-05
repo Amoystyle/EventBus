@@ -100,8 +100,8 @@ int main()
 
     std::atomic<int> active_callbacks{0};
     std::atomic<int> max_active_callbacks{0};
-    std::atomic<bool> start_serialized_publishers{false};
-    bus.subscribe("serialized", [&active_callbacks, &max_active_callbacks](int) {
+    std::atomic<bool> start_default_publishers{false};
+    bus.subscribe("default_concurrent", [&active_callbacks, &max_active_callbacks](int) {
         const int active = active_callbacks.fetch_add(1) + 1;
         int observed = max_active_callbacks.load();
         while (active > observed &&
@@ -111,22 +111,22 @@ int main()
         active_callbacks.fetch_sub(1);
     });
 
-    std::vector<std::thread> serialized_publishers;
+    std::vector<std::thread> default_publishers;
     for (int i = 0; i < 4; ++i) {
-        serialized_publishers.emplace_back([&bus, &start_serialized_publishers]() {
-            while (!start_serialized_publishers.load()) {
+        default_publishers.emplace_back([&bus, &start_default_publishers]() {
+            while (!start_default_publishers.load()) {
                 std::this_thread::yield();
             }
             for (int j = 0; j < 20; ++j) {
-                bus.publish("serialized", j);
+                bus.publish("default_concurrent", j);
             }
         });
     }
-    start_serialized_publishers.store(true);
-    for (auto& thread : serialized_publishers) {
+    start_default_publishers.store(true);
+    for (auto& thread : default_publishers) {
         thread.join();
     }
-    assert(max_active_callbacks.load() == 1);
+    assert(max_active_callbacks.load() > 1);
 
     std::atomic<int> concurrent_active_callbacks{0};
     std::atomic<int> concurrent_max_active_callbacks{0};
@@ -139,7 +139,7 @@ int main()
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         concurrent_active_callbacks.fetch_sub(1);
-    }, ExecutionPolicy::Concurrent);
+    });
 
     std::vector<std::thread> concurrent_publishers;
     for (int i = 0; i < 4; ++i) {
@@ -176,17 +176,33 @@ int main()
     assert(callback_finished.load());
     publisher.join();
 
+    int error_logs = 0;
+    bus.setLogHandler([&error_logs](LogLevel level, const std::string& message) {
+        if (level == LogLevel::Error && message.find("expected test exception") != std::string::npos) {
+            ++error_logs;
+        }
+    });
+
     bus.subscribe("throws", []() {
         throw std::runtime_error("expected test exception");
     });
     auto throw_result = bus.publish("throws");
     assert(throw_result.failed == 1);
     assert(throw_result.invoked == 0);
+    assert(error_logs == 1);
     
     std::cout << "\n=== Statistics ===" << std::endl;
     auto stats = bus.getStats();
     std::cout << "Total events: " << stats.total_events << std::endl;
     std::cout << "Total callbacks: " << stats.total_callbacks << std::endl;
+
+    bus.close();
+    assert(bus.getCallbackCount("add") == 0);
+    assert(bus.subscribe("after_close", []() {}) == 0);
+    auto closed_result = bus.publish("after_close");
+    assert(closed_result.subscribers == 0);
+    assert(closed_result.invoked == 0);
+    assert(!bus.publish_if_min_subscribers("after_close", 1));
     
     std::cout << "\n=== Test Complete ===" << std::endl;
     return 0;
